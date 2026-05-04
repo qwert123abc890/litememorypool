@@ -41,4 +41,9 @@ int main()
 	pool.free(b3);
 	pool.free(b4);
 
+	MemoryPool p2(2, 128);
+	void* a = p2.allocate();
+	void* a1 = p2.allocate();
+	void* a2 = p2.allocate(); // 应该返回 nullptr
+	std::cout << "空指针:" << a2 << "\n";
 }
