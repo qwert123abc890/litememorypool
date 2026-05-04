@@ -8,25 +8,30 @@ class MemoryPool
 {
 private:
 	MemoryBlock* free_list_;
+	void* pool_memory_;
 	std::mutex pool_mutex;
 	size_t total_blocks;
 	size_t free_blocks;
+	size_t user_data_size;
+	size_t header_size;
+	size_t total_size;
+private:
+	size_t align_up(size_t x, size_t align)
+    {
+        return (x + align - 1) & ~(align - 1);
+    }
 public:
 	MemoryPool(const MemoryPool&) = delete; // Disable copy constructor
 	MemoryPool& operator=(const MemoryPool&) = delete; // Disable copy assignment operator
-	MemoryPool(size_t t = 64) : total_blocks(t), free_blocks(t)
+	explicit MemoryPool(size_t t = 64) : total_blocks(t), free_blocks(t) //避免隐式类型转换
 	{
-		free_list_ = new MemoryBlock();
-		MemoryBlock* current = free_list_;
-		for (int i = 1; i < t; i++)
-		{
-			MemoryBlock* newBlock = new MemoryBlock();
-			current->setNext(newBlock);
-			current = newBlock;
-		}
-		
+		header_size = align_up( sizeof(MemoryBlock),alignof(std::max_align_t) );
+		total_size = header_size*total_blocks;
+
+		pool_memory_ = ::operator new (total_size);
+		free_list_ = (MemoryBlock*)pool_memory_;
 	}
-	MemoryBlock* allocate()
+	void* allocate()
 	{
 		std::lock_guard<std::mutex> lock(pool_mutex);
 		if (!free_list_)
@@ -40,41 +45,28 @@ public:
 		free_blocks--;
 		node->setNext(nullptr); // Detach the allocated block from the pool
 		node->set_alive();
-		return node;
+		return (char*)node + sizeof(MemoryBlock);
 	}
-	void free(MemoryBlock* block)
+	void free()
 	{
-		if (block == nullptr)
-		{
-			std::cout << "Error: Attempt to free a null block!" << std::endl;
-			return; // Invalid block
-		}
-		if (block->is_freed())
-		{
-			std::cout << "Error: Double free of memory blocks!" << "\n";
-			return;
-		}
-		{
-			std::lock_guard<std::mutex> lock(pool_mutex);
-			block->set_dead();
-			block->setNext(free_list_);
-			free_list_ = block;
-			free_blocks++;
-		}
+		
 	}
 	~MemoryPool()
 	{
 		MemoryBlock* current = free_list_;
-		while (current)
+		while(current)
 		{
-			MemoryBlock* next = current->getNext();
-			delete current;
-			current = next;
+			free_list_ = current->getNext();
+			current->~MemoryBlock();
+			current = free_list_;
 		}
+		delete[] pool_memory_;
 		free_list_ = nullptr;
+		pool_memory_ = nullptr;
 	}
-
-	
-
+	bool is_owned(void* ptr)
+	{
+		return ((char*)ptr >= (char*)pool_memory_ + header_size) && ((char*)ptr <= (char*)pool_memory_ + total_size) ;
+	}
 };
 
