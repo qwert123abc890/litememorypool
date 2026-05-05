@@ -7,6 +7,7 @@
 #include<iomanip>
 int main()
 {
+    SetConsoleOutputCP(CP_UTF8);
     MemorySafePool pool(2, 8);
 
     char* p = static_cast<char*>(pool.allocate());
@@ -27,12 +28,13 @@ int main()
 
     unsigned char* bytes = (unsigned char*)pool.get_canary_ptr(p);
     std::cout << "canary处的内容:" ;
+    std::cout << std::hex << std::uppercase ;
     for (int i = 0; i < 8; i++)
     {
-        std::cout << std::hex << std::uppercase << bytes[i];
+        std::cout << static_cast<int>(bytes[i]) << " ";
     }
     std::cout << std::dec;
-    printf("\n");
+    std::cout << "\n";
 
     // 打印canary值
     std::cout << "free前canary处内容: " << std::hex << std::uppercase << *pool.get_canary_ptr(p) << "\n";  // 使用*来打印canary的内容
