@@ -50,7 +50,7 @@ public:
 			current->canary = (uint64_t*)((char*)(pool_ptr)+i * total_sizes + (header_sizes + user_need));
 			*(current->canary) = CANARY_VALUE;
 			current->is_used = false;
-			if (i != total_sizes - 1)
+			if (i != total_blocks - 1)
 			{
 				current->next = (Header*)((char*)(pool_ptr)+(i + 1) * (total_sizes));
 			}
@@ -143,7 +143,7 @@ public:
 
 	bool is_owned(T* obj_ptr)
 	{
-		Header* header_ptr = (char*)obj_ptr - header_sizes;
+		Header* header_ptr = reinterpret_cast<Header*>( (char*)obj_ptr - header_sizes );
 		if (((char*)header_ptr < (char*)pool_ptr) || ((char*)header_ptr > (char*)pool_ptr + (total_blocks - 1) * total_sizes))
 		{
 			std::cout << "The pointer address is not within a reasonable range!\n";
@@ -164,7 +164,7 @@ public:
 			std::cout << "A null pointer cannot obtain a Header pointer!\n";
 			return nullptr;
 		}
-		return  (char*)obj - header_sizes;
+		return  reinterpret_cast<Header*>( (char*)obj - header_sizes );
 	}
 
 	T* get_user_ptr(Header* header_ptr)
