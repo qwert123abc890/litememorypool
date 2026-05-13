@@ -20,4 +20,14 @@ int main()
 	strcpy(c3, "12345678");
 	std::cout << "The stored content of c2:" << c3 << "\n";
 	pool.release(c3);
+
+	char* bytes = reinterpret_cast<char*>(c2);
+	printf("0x ");
+	for (size_t i = 0; i < 8; i++)
+	{
+		printf("%02x ", static_cast<unsigned char>(bytes[i]));
+	}
+	printf("\n");
+	
+	return 0;
 }
