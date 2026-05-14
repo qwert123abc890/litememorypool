@@ -6,6 +6,8 @@
 #include<cstdint>
 #include<iostream>
 
+#include<cstdio>
+
 #include<vector>//主要用来存储大内存块的起始地址
 
 template<typename T>
@@ -29,8 +31,6 @@ private:
 	std::vector<void*> BigBlocks; //便于析构
 	Header* free_list;
 
-	//扩容
-
 public:
 	const std::type_info* type_info_type = &typeid(T);
 	size_t alignas_up(size_t x, size_t alignasment)
@@ -49,7 +49,10 @@ public:
 
 		void* pool_ptr = operator new(memory_capacity);
 		BigBlocks.emplace_back(pool_ptr);//存储大内存块的起始地址
-		std::cout << "start address of the big_memory_block:" << pool_ptr << "\n";
+#if defined(_DEBUG) 
+		printf("start address of the big_memory_block: %p\n", pool_ptr);
+#endif 
+		//std::cout << "start address of the big_memory_block:" << pool_ptr << "\n";
 		free_list = (Header*)pool_ptr;
 		//分割内存块
 		Header* current ;
@@ -66,13 +69,13 @@ public:
 			}
 			else//i==sub_blocks-1
 			{
-				std::cout << "current->next = nullptr\n";
+				//std::cout << "current->next = nullptr\n";
 				current->next = nullptr;
 			}
 		}
 
 	}
-
+	//扩容
 	void* allocate_new_BigBlock()
 	{
 		void* pool_ptr = operator new(memory_capacity);
@@ -133,15 +136,23 @@ public:
 	{
 		if (free_list == nullptr)
 		{
-			std::cout << "No free memory! Expand the memory capacity.\n";
+			std::cerr << "No free memory! Expand the memory capacity.\n";
 			//将来要支持自动扩容
 			allocate_new_BigBlock();
 			//return nullptr;
 		}
-		std::cout << "The current address of free_list:" << free_list << "\n";//其Header*指针地址
+		
+#if defined(_DEBUG)  
+		printf("The current address of free_list: %p\n", free_list);
+#endif
+		//std::cout << "The current address of free_list:" << free_list ;//其Header*指针地址
 		free_list->is_used = true;
 		char* p = (char*)free_list + header_sizes;
 		free_list = free_list->next;
+#if defined(_DEBUG) 
+		printf("The current address of object: %p\n", static_cast<void*>(p));
+#endif 
+		//std::cout << " ,the address of the object:" << (void*)p <<  "\n";
 		return new(p) T(std::forward<Args>(args)...);
 	}
 
@@ -149,7 +160,7 @@ public:
 	{
 		if (obj_ptr == nullptr)
 		{
-			std::cout << "A null pointer cannot be returned!\n";
+			std::cerr << "A null pointer cannot be returned!\n";
 			return;
 		}
 		
@@ -158,29 +169,38 @@ public:
 		//std::cout << "The address of the returned object pointer:" << header_ptr << "\n";
 		if (((char*)header_ptr < pool_ptr_char) || ((char*)header_ptr > pool_ptr_char + (sub_blocks - 1) * total_sizes))
 		{
-			std::cout << "The pointer address is not within a reasonable range!\n";
+			std::cerr << "The pointer address is not within a reasonable range!\n";
 			return;
 		}
 		
 		if (((char*)header_ptr - pool_ptr_char) % total_sizes != 0)
 		{
-			std::cout << "The pointer address is not within a valid range!\n";
+			std::cerr << "The pointer address is not within a valid range!\n";
 			return;
 		}
 		if (!header_ptr->is_used)
 		{
-			std::cout << "double free!\n";
+			std::cerr << "double free!\n";
 			return;//避免double free;
 		}
 		//检查一下栅栏，是否存在越界写入现象
 		uint64_t* canary_ptr = (uint64_t*)((char*)obj_ptr + user_need);
 		if (*canary_ptr != CANARY_VALUE)
 		{
-			std::cout << "The canary area has been illegally written across the boundary!\n";
+			std::cerr << "The canary area has been illegally written across the boundary!\n";
 			return;
 		}
-		obj_ptr->~T();
+#if defined(_DEBUG) 
+		printf("The address of the free_list before return: % p\n", free_list);
+#endif 
+#if defined(_DEBUG) 
+		printf("The current address of object: %p\n", static_cast<void*>(obj_ptr));
+#endif 
 
+		obj_ptr->~T();
+#if defined(_DEBUG) 
+		printf("The object destructor is called successfully.\n");
+#endif
 		std::memset(obj_ptr, 0xDD, user_need);
 		header_ptr->next = free_list;
 		free_list = header_ptr;
@@ -193,12 +213,12 @@ public:
 		void* pool_ptr = header_ptr->block_start;
 		if (((char*)header_ptr < (char*)pool_ptr) || ((char*)header_ptr > (char*)pool_ptr + (sub_blocks - 1) * total_sizes))
 		{
-			std::cout << "The pointer address is not within a reasonable range!\n";
+			std::cerr << "The pointer address is not within a reasonable range!\n";
 			return false;
 		}
 		if (((char*)obj_ptr - (char*)pool_ptr) % total_sizes != 0)
 		{
-			std::cout << "The pointer address is not within a valid range!\n";
+			std::cerr << "The pointer address is not within a valid range!\n";
 			return false;
 		}
 		return true;
@@ -208,7 +228,7 @@ public:
 	{
 		if (!obj)
 		{
-			std::cout << "A null pointer cannot obtain a Header pointer!\n";
+			std::cerr << "A null pointer cannot obtain a Header pointer!\n";
 			return nullptr;
 		}
 		return  reinterpret_cast<Header*>((char*)obj - header_sizes);
@@ -218,7 +238,7 @@ public:
 	{
 		if (!header_ptr)
 		{
-			std::cout << "A null pointer cannot obtain a User pointer!\n";
+			std::cerr << "A null pointer cannot obtain a User pointer!\n";
 			return nullptr;
 		}
 		return (T*)((char*)header_ptr + header_sizes);
@@ -228,7 +248,7 @@ public:
 	{
 		if (!obj_ptr)
 		{
-			std::cout << "A null pointer cannot obtain a Canary pointer!\n";
+			std::cerr << "A null pointer cannot obtain a Canary pointer!\n";
 			return nullptr;
 		}
 		return (uint64_t*)((char*)obj_ptr + user_need);
