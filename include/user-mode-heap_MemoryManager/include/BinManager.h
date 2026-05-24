@@ -1,7 +1,7 @@
 #pragma once
 #include<vector>
 #include<cstddef>
-#include"BinHeader.h"
+#include"Bin_Header.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,20 +32,54 @@ private:
 	void* request_from_os(size_t need_size)
 	{
 		// 无论用户要多少，底层一律以 4KB 物理页为基本单位向操作系统批发
-		size_t page_size = (need_size + 4095) & ~4095;
+		//一个哨兵需要 sizeof(BinHeader) + sizeof(size_t) ,需要16字节
+		size_t page_size = (need_size + 2*sizeof(BinHeader) + 2*sizeof(size_t) + 4095) & ~4095;
 
-		#ifdef _WIN32
-				// Windows 的原生批发接口
-				void* mem = VirtualAlloc(nullptr, page_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-				if (mem) os_pages_record.push_back({ mem,page_size }); // 记账
-				return mem;
-		#else
-				// Linux/MacOS 的原生批发接口
-				void* mem = mmap(nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-				if (mem == MAP_FAILED) return nullptr;
-				os_pages_record.push_back({ mem,page_size }); // 记账
-				return mem;
-		#endif
+#ifdef _WIN32
+		void* mem = VirtualAlloc(nullptr, page_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (mem)
+		{
+			os_pages_record.push_back({ mem,page_size }); // 记账
+
+			BinHeader* header_ptr = reinterpret_cast<BinHeader*>(mem);
+			//header_ptr->size = sizeof(BinHeader) + sizeof(size_t);
+			header_ptr->size = sizeof(BinHeader) + sizeof(size_t);
+			size_t* size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(mem) + sizeof(BinHeader));
+			*size_ptr = sizeof(BinHeader) + sizeof(size_t);
+			header_ptr->is_used = true;
+
+			BinHeader* back_ptr = reinterpret_cast<BinHeader*>(reinterpret_cast<char*>(mem) + page_size - sizeof(BinHeader) - sizeof(size_t));
+			size_t* back_size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(mem) + page_size - sizeof(size_t));
+			*back_size_ptr = sizeof(BinHeader) + sizeof(size_t);
+			back_ptr->size = sizeof(BinHeader) + sizeof(size_t);
+			back_ptr->is_used = true;
+
+			mem = reinterpret_cast<void*>(reinterpret_cast<char*>(mem) + sizeof(BinHeader) + sizeof(size_t) );  // 返回给用户的地址，跳过头部
+		}
+		return mem;
+#else
+		// Linux/MacOS 的原生批发接
+		void* mem = mmap(nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mem == MAP_FAILED) return nullptr;
+		os_pages_record.push_back({ mem,page_size }); // 记账
+
+		BinHeader* header_ptr = reinterpret_cast<BinHeader*>(mem);
+		size_t* size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(mem) + sizeof(BinHeader));
+		*size_ptr = sizeof(BinHeader) + sizeof(size_t);
+		header_ptr->size = sizeof(BinHeader) + sizeof(size_t);
+		header_ptr->is_used = sizeof(BinHeader) + sizeof(size_t);
+
+		BinHeader* back_ptr = reinterpret_cast<BinHeader*>(reinterpret_cast<char*>(mem) + page_size - sizeof(size_t));
+		back_ptr->size = header_ptr->size;
+		size_t* back_size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(mem) + page_size - sizeof(size_t));
+		*back_size_ptr = sizeof(BinHeader) + sizeof(size_t);
+		back_ptr->size = sizeof(BinHeader) + sizeof(size_t);
+		back_ptr->is_used = true;
+
+		mem = reinterpret_cast<void*>(reinterpret_cast<char*>(mem) + sizeof(BinHeader) + sizeof(size_t)); // 返回给用户的地址，跳过头部
+
+		return mem;
+#endif
 	}
 	void insert_into_bin(BinHeader* ptr) //确保munmap的内存块不被插入到bin中
 	{
@@ -75,7 +109,7 @@ public:
 	}
 	void* allocate(size_t user_need)
 	{
-		size_t need = sizeof(BinHeader) + alignas_up(user_need, alignof(std::max_align_t)) + sizeof(uint64_t);
+		size_t need = sizeof(BinHeader) + alignas_up(user_need, alignof(std::max_align_t)) + sizeof(uint64_t) + sizeof(size_t);
 		int bin_index = get_bin_index(need);
 
 		//发现没有合适的内存块，继续向下一个bin寻找，直到找到合适的内存块或者所有bin都找完了
@@ -94,6 +128,9 @@ public:
 			uint64_t* canary = reinterpret_cast<uint64_t*>(reinterpret_cast<char*>(ptr->user_ptr()) + user_need);
 			*canary = 0xDEADBEEFCAFEBABEULL;
 
+			size_t* size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(ptr->user_ptr()) + user_need + sizeof(uint64_t));
+			*size_ptr = ptr->size;	
+			
 			return ptr->user_ptr();
 
 		}
@@ -111,6 +148,8 @@ public:
 
 			uint64_t* canary = reinterpret_cast<uint64_t*>(reinterpret_cast<char*>(best_fit->user_ptr()) + user_need);
 			*canary = 0xDEADBEEFCAFEBABEULL;
+			size_t* size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(best_fit->user_ptr()) + user_need + sizeof(uint64_t));
+			*size_ptr = best_fit->size;
 
 			return best_fit->user_ptr();
 		}
@@ -120,14 +159,24 @@ public:
 		if (!os_page) return nullptr;
 
 		BinHeader* header_ptr = reinterpret_cast<BinHeader*>(os_page);
-		header_ptr->size = (need + 4095) & ~4095; 
+		header_ptr->prev = nullptr;
+		header_ptr->next = nullptr;
+		header_ptr->size = need;
 		header_ptr->is_used = true;
 
 		uint64_t* canary = reinterpret_cast<uint64_t*>(reinterpret_cast<char*>(header_ptr->user_ptr()) + user_need);
 		*canary = 0xDEADBEEFCAFEBABEULL;
 
-		BinHeader* remaining_ptr = header_ptr->split(need);
-		if(remaining_ptr) insert_into_bin(remaining_ptr);
+		size_t* header_size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(canary)  +  sizeof(uint64_t) );
+		*header_size_ptr = need;
+		//此时的header_ptr的prev和next均未定义，并不一定为nullptr,易突破if(header_ptr->next)引发异常
+
+		BinHeader* remaining_ptr = reinterpret_cast<BinHeader*>((char*)(header_ptr)+need);
+		remaining_ptr->size = (need + 2 * sizeof(BinHeader) + 2 * sizeof(size_t) + 4095) & ~4095 - need - 2 * sizeof(BinHeader) - 2 * sizeof(size_t) ;
+		size_t* size_ptr = reinterpret_cast<size_t*>(reinterpret_cast<char*>(header_ptr) + ((need + 2 * sizeof(BinHeader) + 2 * sizeof(size_t) + 4095) & ~4095 )- sizeof(size_t) - sizeof(BinHeader) - sizeof(size_t));
+		*size_ptr = remaining_ptr->size;
+
+		if (remaining_ptr) insert_into_bin(remaining_ptr);
 
 
 		return header_ptr->user_ptr();
@@ -144,20 +193,22 @@ public:
 		BinHeader* header_ptr = (BinHeader*)((char*)user_ptr - sizeof(BinHeader));
 		header_ptr->is_used = false;
 		//合并相邻的空闲块
+		header_ptr = header_ptr->merge();
+
 		insert_into_bin(header_ptr);
 
 	}
 
 	~BinManager()
 	{
-		for (auto &page : os_pages_record)
+		for (auto& page : os_pages_record)
 		{
-			#ifdef _WIN32
-						VirtualFree(page.address, 0, MEM_RELEASE);
-			#else
-						munmap(page.address, page.size); // 只存储了地址，未记录其大小
-			#endif
+#ifdef _WIN32
+			VirtualFree(page.address, 0, MEM_RELEASE);
+#else
+			munmap(page.address, page.size); // 只存储了地址，未记录其大小
+#endif
 		}
 	}
 
-	};
+};
